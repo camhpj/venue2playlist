@@ -33,7 +33,7 @@ class SpotifyClient:
         self,
         client_id: str,
         client_secret: str,
-        redirect_uri: str = "http://localhost:8888/callback",
+        redirect_uri: str = "http://127.0.0.1:8888/callback",
         cache_path: Path | None = None,
         cache: Cache | None = None,
     ):

@@ -4,6 +4,7 @@ Primary source for structured concert data.
 API documentation: https://api.setlist.fm/docs/1.0/index.html
 """
 
+import time
 from datetime import date, datetime
 
 import httpx
@@ -111,10 +112,9 @@ class SetlistFmSource(BaseDataSource):
         start_date: date | None = None,
         end_date: date | None = None,
     ) -> list[Performance]:
-        """Get performances at a venue, optionally filtered by date range.
+        """Get performances at a venue, filtered by date range.
         
-        Note: Setlist.fm API doesn't support date range filtering directly,
-        so we fetch all and filter client-side.
+        Uses /search/setlists with venueId and year parameters for efficiency.
         """
         # Check cache first
         start_str = start_date.isoformat() if start_date else None
@@ -135,36 +135,23 @@ class SetlistFmSource(BaseDataSource):
         )
 
         all_setlists = []
-        page = 1
-        total_pages = 1
 
-        while page <= total_pages:
-            try:
-                response = self._client.get(
-                    f"/venue/{venue_id}/setlists",
-                    params={"p": page},
-                )
-                response.raise_for_status()
-                data = response.json()
-            except httpx.HTTPError as e:
-                logger.error("performances_fetch_failed", error=str(e), venue_id=venue_id, page=page)
-                break
+        # Determine years to fetch
+        if start_date and end_date:
+            years = list(range(start_date.year, end_date.year + 1))
+        else:
+            # Default: fetch current year only
+            years = [date.today().year]
 
-            setlists = data.get("setlist", [])
-            all_setlists.extend(setlists)
+        logger.info("fetching_years", years=years)
 
-            # Handle pagination
-            items_per_page = data.get("itemsPerPage", 20)
-            total = data.get("total", 0)
-            total_pages = (total + items_per_page - 1) // items_per_page if items_per_page > 0 else 1
+        # Fetch setlists for each year
+        for year in years:
+            year_setlists = self._fetch_setlists_for_year(venue_id, year)
+            all_setlists.extend(year_setlists)
+            time.sleep(0.5)  # Brief pause between years
 
-            logger.debug("fetched_page", page=page, total_pages=total_pages, count=len(setlists))
-            page += 1
-
-            # Rate limiting: setlist.fm allows 2 requests/second
-            # The httpx client handles this reasonably, but we could add explicit delays
-
-        # Convert to Performance records
+        # Convert to Performance records and filter by date
         performances = []
         for setlist in all_setlists:
             perf = self._setlist_to_performance(setlist)
@@ -188,6 +175,65 @@ class SetlistFmSource(BaseDataSource):
             self.cache.set_performances(venue_id, self.name, performances, start_str, end_str)
 
         return performances
+
+    def _fetch_setlists_for_year(self, venue_id: str, year: int) -> list[dict]:
+        """Fetch all setlists for a venue in a specific year."""
+        all_setlists = []
+        page = 1
+        total_pages = 1
+
+        while page <= total_pages:
+            try:
+                response = self._client.get(
+                    "/search/setlists",
+                    params={"venueId": venue_id, "year": year, "p": page},
+                )
+                response.raise_for_status()
+                data = response.json()
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429:
+                    # Rate limited - wait and retry once
+                    logger.warning("rate_limited", page=page, year=year, waiting_seconds=2)
+                    time.sleep(2)
+                    try:
+                        response = self._client.get(
+                            "/search/setlists",
+                            params={"venueId": venue_id, "year": year, "p": page},
+                        )
+                        response.raise_for_status()
+                        data = response.json()
+                    except httpx.HTTPError as retry_error:
+                        logger.error("retry_failed", error=str(retry_error), page=page, year=year)
+                        break
+                else:
+                    logger.error("fetch_failed", error=str(e), year=year, page=page)
+                    break
+            except httpx.HTTPError as e:
+                logger.error("fetch_failed", error=str(e), year=year, page=page)
+                break
+
+            setlists = data.get("setlist", [])
+            all_setlists.extend(setlists)
+
+            # Handle pagination
+            items_per_page = data.get("itemsPerPage", 20)
+            total = data.get("total", 0)
+            total_pages = (total + items_per_page - 1) // items_per_page if items_per_page > 0 else 1
+
+            logger.debug(
+                "fetched_page",
+                year=year,
+                page=page,
+                total_pages=total_pages,
+                count=len(setlists),
+            )
+            page += 1
+
+            # Rate limiting
+            time.sleep(0.6)
+
+        logger.info("year_complete", year=year, setlists=len(all_setlists))
+        return all_setlists
 
     def _setlist_to_performance(self, setlist: dict) -> Performance | None:
         """Convert a setlist.fm setlist to a Performance record."""

@@ -1,9 +1,20 @@
 """Structured logging configuration using structlog."""
 
+import logging
 import sys
 from typing import Literal
 
 import structlog
+
+
+# Map string levels to logging module constants
+LOG_LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
 
 
 def configure_logging(
@@ -16,6 +27,8 @@ def configure_logging(
         level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         format: Output format - "console" for human-readable, "json" for machine-readable
     """
+    log_level = LOG_LEVELS.get(level.upper(), logging.INFO)
+
     shared_processors: list[structlog.typing.Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
@@ -32,9 +45,7 @@ def configure_logging(
                 structlog.processors.dict_tracebacks,
                 structlog.processors.JSONRenderer(),
             ],
-            wrapper_class=structlog.make_filtering_bound_logger(
-                getattr(structlog, level.upper(), structlog.INFO)
-            ),
+            wrapper_class=structlog.make_filtering_bound_logger(log_level),
             context_class=dict,
             logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
             cache_logger_on_first_use=True,
@@ -46,9 +57,7 @@ def configure_logging(
                 *shared_processors,
                 structlog.dev.ConsoleRenderer(colors=True),
             ],
-            wrapper_class=structlog.make_filtering_bound_logger(
-                getattr(structlog, level.upper(), structlog.INFO)
-            ),
+            wrapper_class=structlog.make_filtering_bound_logger(log_level),
             context_class=dict,
             logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
             cache_logger_on_first_use=True,
