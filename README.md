@@ -123,7 +123,3 @@ country_filter = FieldFilter("country", {"US", "UK"})
 chain = FilterChain().add(genre_filter).add(country_filter)
 result = chain.apply(performances)
 ```
-
-## License
-
-MIT
